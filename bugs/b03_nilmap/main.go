@@ -8,7 +8,7 @@ type Summary struct {
 }
 
 func NewSummary(name string) *Summary {
-	return &Summary{Name: name}
+	return &Summary{Name: name, Scores: map[string]int{}}
 }
 
 func (s *Summary) Add(subject string, score int) {

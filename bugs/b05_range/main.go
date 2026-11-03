@@ -9,9 +9,10 @@ type Student struct {
 
 // 给所有不及格的学生加 10 分
 func curve(students []Student) {
-	for _, s := range students {
+	for i, s := range students {
 		if s.Score < 60 {
 			s.Score += 10
+			students[i] = s
 		}
 	}
 }
