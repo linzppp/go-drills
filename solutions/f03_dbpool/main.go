@@ -1,0 +1,115 @@
+package main
+
+import (
+	"database/sql"
+	"database/sql/driver"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
+	"time"
+)
+
+// ---- 一个最小的内存假驱动，免外部依赖，行为与真实驱动一致 ----
+type fakeDriver struct{}
+type fakeConn struct{}
+type fakeStmt struct{}
+type fakeRows struct{ i int }
+
+func (fakeDriver) Open(string) (driver.Conn, error)         { return fakeConn{}, nil }
+func (fakeConn) Prepare(string) (driver.Stmt, error)        { return fakeStmt{}, nil }
+func (fakeConn) Close() error                               { return nil }
+func (fakeConn) Begin() (driver.Tx, error)                  { return nil, fmt.Errorf("not supported") }
+func (fakeStmt) Close() error                               { return nil }
+func (fakeStmt) NumInput() int                              { return -1 }
+func (fakeStmt) Exec([]driver.Value) (driver.Result, error) { return nil, fmt.Errorf("not supported") }
+func (fakeStmt) Query([]driver.Value) (driver.Rows, error)  { return &fakeRows{}, nil }
+func (r *fakeRows) Columns() []string                       { return []string{"id", "name"} }
+func (r *fakeRows) Close() error                            { return nil }
+func (r *fakeRows) Next(dest []driver.Value) error {
+	if r.i >= 100 {
+		return io.EOF
+	}
+	r.i++
+	dest[0] = int64(r.i)
+	dest[1] = fmt.Sprintf("school-%d", r.i)
+	return nil
+}
+
+// ---- 业务代码 ----
+var db *sql.DB
+
+func findSchool(keyword string) (string, error) {
+	rows, err := db.Query("SELECT id, name FROM school")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return "", err
+		}
+		if name == keyword {
+			return name, nil
+		}
+	}
+	return "", rows.Err()
+}
+
+func main() {
+	time.AfterFunc(5*time.Minute, func() { os.Exit(0) })
+	go func() { log.Println(http.ListenAndServe("localhost:6060", nil)) }()
+
+	sql.Register("fake", fakeDriver{})
+	var err error
+	db, err = sql.Open("fake", "")
+	if err != nil {
+		log.Fatal(err)
+	}
+	db.SetMaxOpenConns(5)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/school", func(w http.ResponseWriter, r *http.Request) {
+		name, err := findSchool(r.URL.Query().Get("name"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, name)
+	})
+	go func() { log.Println(http.ListenAndServe("localhost:8082", mux)) }()
+	time.Sleep(200 * time.Millisecond)
+
+	go func() {
+		i := 0
+		for {
+			i++
+			go func(n int) {
+				name := fmt.Sprintf("school-%d", n%100+1) // 总能找到
+				c := &http.Client{Timeout: 3 * time.Second}
+				resp, err := c.Get("http://localhost:8082/school?name=" + name)
+				if err != nil {
+					log.Println("request error:", err)
+					return
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != 200 {
+					log.Println("request failed, status", resp.StatusCode)
+				}
+			}(i)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
+	for {
+		time.Sleep(2 * time.Second)
+		s := db.Stats()
+		fmt.Printf("[%s] open=%d inUse=%d idle=%d waitCount=%d\n",
+			time.Now().Format("15:04:05"), s.OpenConnections, s.InUse, s.Idle, s.WaitCount)
+	}
+}
