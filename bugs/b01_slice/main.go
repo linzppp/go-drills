@@ -4,7 +4,9 @@ import "fmt"
 
 // 取出前 n 个学校作为"重点校"，再追加一个"试点校"
 func keySchools(all []string, n int) []string {
-	key := all[:n]
+	// key := all[:n] 错误代码
+	key := make([]string, n)
+	copy(key, all)
 	return append(key, "试点校")
 }
 

@@ -11,12 +11,16 @@ func open(name string) *Conn {
 	return &Conn{name: name}
 }
 
+func innerHandle(n string) {
+	c := open(n)
+	defer c.Close()
+	fmt.Println("  处理", n)
+}
+
 // 依次处理多个数据源，期望：处理完一个就释放一个
 func processAll(names []string) {
 	for _, n := range names {
-		c := open(n)
-		defer c.Close()
-		fmt.Println("  处理", n)
+		innerHandle(n)
 	}
 	fmt.Println("全部处理完毕")
 }
